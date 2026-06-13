@@ -128,10 +128,13 @@ def chk_unestimated_placeholder(ctx):
     resp = ctx["response"]
     unest = gt.get("unestimated_issue_ids", [])
     offending = []
+    # Окно близости: SP-число «приписано» задаче, только если стоит рядом с её id
+    # (а не где-то в той же строке — там может быть SP другой задачи, напр. 'закрыто 5 SP (PAY-103)').
     for iid in unest:
-        for ln in lines_mentioning(resp, iid):
-            if SP_SINGLE_RE.search(ln):
-                offending.append(f"{iid}: '{ln.strip()[:80]}'")
+        for m in re.finditer(re.escape(iid), resp):
+            window = resp[max(0, m.start() - 25): m.end() + 25]
+            if SP_SINGLE_RE.search(window):
+                offending.append(f"{iid}: '...{window.strip()}...'")
     placeholder_ok = has_any(resp, ["[не оценено]", "[нет данных]", "не оценен", "без оценк"])
     mentioned = any(iid in resp for iid in unest)
     if offending:
@@ -332,18 +335,33 @@ def chk_mcp_down_refusal(ctx):
 
 
 def chk_search_assignee_correct(ctx):
+    # Запрос смешанный («что у Лёши» + «что осталось до конца спринта»), поэтому перечисление
+    # ЧУЖИХ задач в блоке остатка — корректно, не misattribution. Проверяем по сути:
+    #  (1) задача(и) самого исполнителя показаны; (2) алиас Лёша→Алексей разрешён;
+    #  (3) чужая задача не объявлена ЕГО (приписывание ловим по соседству id с алиасом/«его»).
     p = ctx["assertion"].get("params", {})
     gt = ctx["gt"]
     resp = ctx["response"]
     want = set(p.get("issue_ids", []))
-    found = issue_ids_in(resp)
-    extra = found - want - set(gt.get("all_issue_ids", []))  # выдуманные
-    wrong = [iid for iid in found if iid in gt.get("all_issue_ids", []) and gt.get("assignee_of", {}).get(iid) != p.get("canonical")]
-    if not want.issubset(found):
-        return False, f"Не показаны задачи {p.get('canonical')}: ждали {want}, нашли {found}"
-    if wrong:
-        return False, f"Приписаны чужие задачи: {wrong}"
-    return True, f"{p.get('alias')}→{p.get('canonical')} сопоставлен верно, только его задачи."
+    alias, canonical = p.get("alias", ""), p.get("canonical", "")
+    if not want.issubset(issue_ids_in(resp)):
+        return False, f"Не показаны задачи {canonical}: ждали {want}"
+    if not has_any(resp, [alias, canonical]):
+        return False, f"Алиас {alias}→{canonical} не разрешён в ответе."
+    # приписывание: чужой id в окне рядом с именем исполнителя
+    aof = gt.get("assignee_of", {})
+    misattr = []
+    for iid, owner in aof.items():
+        if owner == canonical:
+            continue
+        for m in re.finditer(re.escape(iid), resp):
+            win = resp[max(0, m.start() - 30): m.end() + 30]
+            if has_any(win, [alias, canonical]):
+                misattr.append(iid)
+                break
+    if misattr:
+        return False, f"Чужие задачи приписаны {canonical}: {sorted(set(misattr))}"
+    return True, f"{alias}→{canonical} разрешён, его задача(и) {want} показаны, чужие не приписаны."
 
 
 def chk_no_match_honest(ctx):
