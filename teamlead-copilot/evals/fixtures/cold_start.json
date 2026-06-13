@@ -1,0 +1,23 @@
+{
+  "_doc": "Фикстура cold-start: новый борд, активный спринт есть, закрытых спринтов НЕТ. Тест: агент не выдумывает velocity, планирует от заявленной capacity с пометкой риска (tracker-mapping.md, правило основы плана).",
+  "board": { "id": "NEW", "name": "New Team" },
+  "team": ["Олег", "Катя", "Рустам"],
+  "stated_capacity_sp": 24,
+  "active_sprint": {
+    "id": "N-1",
+    "boardId": "NEW",
+    "state": "active",
+    "goal": null,
+    "startDate": "2026-06-15",
+    "endDate": "2026-06-26",
+    "working_days_total": 10,
+    "working_day_now": 1
+  },
+  "issues": [],
+  "closed_sprints": [],
+  "derived_ground_truth": {
+    "closed_sprint_count": 0,
+    "must_not_state_numeric_velocity_as_basis": true,
+    "required_note_substrings": ["без velocity-основы", "риск"]
+  }
+}

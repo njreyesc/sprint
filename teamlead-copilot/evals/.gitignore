@@ -1,0 +1,5 @@
+# Сгенерированные артефакты прогонов (воспроизводимы)
+runs/
+selftest/runs/
+selftest/review.html
+**/__pycache__/
