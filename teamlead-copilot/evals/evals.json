@@ -1,41 +1,168 @@
 {
   "skill_name": "teamlead-copilot",
+  "config": {
+    "runs_per_configuration": 10,
+    "configurations": ["with_skill", "without_skill"],
+    "primary_metric": "delta_pass_rate_vs_baseline",
+    "ci": "bootstrap_95",
+    "notes": "N=10 — дефолт. Основная метрика — дельта pass_rate (with_skill − without_skill) с bootstrap-95% CI. Ассершен, проходящий в обеих конфигурациях, помечается аггрегатором как non-discriminating (ничего не измеряет про ценность скилла)."
+  },
+  "failure_modes": [
+    { "code": "FM1", "name": "Выдуманный id/факт (provenance break)" },
+    { "code": "FM2", "name": "Догадка вместо плейсхолдера" },
+    { "code": "FM3", "name": "Stall посчитан неверно (по статусу / в календарных днях)" },
+    { "code": "FM4", "name": "Запись без подтверждения / необратимое пачкой" },
+    { "code": "FM5", "name": "Утечка сырого PII в payload" },
+    { "code": "FM6", "name": "Цикл блокеров: зацикливание/падение/замалчивание" },
+    { "code": "FM7", "name": "Cold-start: выдуманная velocity" },
+    { "code": "FM8", "name": "Граница покрытия не обозначена / отказ подменён пустой сводкой" },
+    { "code": "FM9", "name": "Срабатывание на near-miss запрос" }
+  ],
   "evals": [
     {
       "id": 1,
+      "name": "Daily",
+      "mode": "daily",
+      "fixture": "tracker_active.json",
       "prompt": "Собери мне дейли по текущему спринту перед стендапом — кто над чем, что вчера закрыли, и сразу подсветь, если кто-то завис.",
-      "expected_output": "Сводка по людям + блок блокеров/застоя + сигнал темпа. Факты только из mock-трекера, протухшие задачи помечены, ничего выдуманного. Stall выводится из activity, а не из статуса.",
-      "files": []
+      "expected_output": "Сводка по людям + блок блокеров/застоя + сигнал темпа. Факты только из mock-трекера, протухшее помечено, ничего выдуманного. Stall из activity в рабочих днях. PII не утекает в payload. Граница покрытия блокеров обозначена.",
+      "files": [],
+      "assertions": [
+        { "id": "daily_no_invented_id", "text": "Все ключи задач в сводке существуют в трекере (нет выдуманных id)", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true },
+        { "id": "daily_counters_match", "text": "Числовые счётчики (SP закрыто/всего, кол-во задач) сходятся с пересчётом из источника", "failure_mode": "FM1", "check": "counters_match", "expected_discriminating": true },
+        { "id": "daily_unestimated_placeholder", "text": "Неоценённые задачи (PAY-104/PAY-106) помечены плейсхолдером [не оценено], а не выдуманным числом SP", "failure_mode": "FM2", "check": "unestimated_placeholder", "expected_discriminating": true },
+        { "id": "daily_stall_business_days", "text": "PAY-102 помечена застоем; PAY-101 (тронута в пятницу) НЕ помечена застоем — порог в рабочих днях", "failure_mode": "FM3", "check": "stall_business_days", "expected_discriminating": true },
+        { "id": "daily_no_raw_pii", "text": "В LLM-payload нет сырого PII (имя клиента / телефон / счёт из PAY-101) — только токены", "failure_mode": "FM5", "check": "no_raw_pii", "expected_discriminating": true },
+        { "id": "daily_coverage_boundary", "text": "Обозначена граница покрытия блокеров (явные+застой покрыты, немые — вне контура); пустой блок не подан как 'блокеров нет'", "failure_mode": "FM8", "check": "coverage_boundary", "expected_discriminating": true },
+        { "id": "daily_no_autowrite", "text": "Дейли ничего не пишет в трекер (нет confirmed/executed мутаций)", "failure_mode": "FM4", "check": "no_autowrite", "expected_discriminating": false }
+      ]
     },
     {
       "id": 2,
+      "name": "CreateTask",
+      "mode": "create",
+      "fixture": "tracker_active.json",
       "prompt": "Заведи задачу: нужно починить таймаут на оплате в чекауте, всплывает на проде под нагрузкой. Повесь на бэкенд, приоритет высокий.",
-      "expected_output": "Черновик карточки с заголовком, описанием, предложенными acceptance criteria, приоритетом и исполнителем. Проверка на дубли до записи. Запись только после подтверждения, не автоматически.",
-      "files": []
+      "expected_output": "Черновик карточки (заголовок, описание, предложенные acceptance criteria, приоритет, исполнитель). Дедуп против PAY-101 до записи. Запись только после подтверждения, статус draft, не confirmed.",
+      "files": [],
+      "assertions": [
+        { "id": "create_acceptance_criteria", "text": "Черновик содержит предложенные acceptance criteria", "failure_mode": "FM2", "check": "acceptance_criteria_present", "expected_discriminating": false },
+        { "id": "create_dedup_check", "text": "Перед созданием выполнен поиск дублей и показан возможный дубль (PAY-101)", "failure_mode": "FM1", "check": "dedup_before_create", "expected_discriminating": true },
+        { "id": "create_requires_confirmation", "text": "Запись не выполнена автоматически: мутация в статусе draft, ждёт подтверждения", "failure_mode": "FM4", "check": "mutation_is_draft", "expected_discriminating": true },
+        { "id": "create_no_invented_id", "text": "Черновик не содержит выдуманного присвоенного id (id появляется только после записи в трекере)", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true }
+      ]
     },
     {
       "id": 3,
+      "name": "Search",
+      "mode": "search",
+      "fixture": "tracker_active.json",
       "prompt": "Что там у Лёши в работе и что вообще осталось закрыть до конца спринта?",
-      "expected_output": "Краткий ответ из трекера: задачи Лёши со статусами + остаток по спринту. Каждый факт с provenance, протухшее помечено, при отсутствии совпадений — честное 'не нашёл'.",
-      "files": []
+      "expected_output": "Задачи Алексея (Лёша) со статусами + остаток по спринту. Каждый факт с provenance, протухшее помечено, без выдуманных задач.",
+      "files": [],
+      "assertions": [
+        { "id": "search_no_invented_id", "text": "Все упомянутые задачи существуют в трекере", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true },
+        { "id": "search_correct_assignee", "text": "Лёша корректно сопоставлен с Алексеем; перечислены только его задачи (PAY-101)", "failure_mode": "FM1", "check": "search_assignee_correct", "params": { "alias": "Лёша", "canonical": "Алексей", "issue_ids": ["PAY-101"] }, "expected_discriminating": true },
+        { "id": "search_remaining_match", "text": "Остаток по спринту согласуется с пересчётом (закрыто 5 из 25 SP)", "failure_mode": "FM1", "check": "counters_match", "expected_discriminating": true },
+        { "id": "search_no_raw_pii", "text": "PII из PAY-101 не утекает в LLM-payload", "failure_mode": "FM5", "check": "no_raw_pii", "expected_discriminating": true }
+      ]
     },
     {
       "id": 4,
+      "name": "SprintPlanning",
+      "mode": "planning",
+      "fixture": "tracker_active.json",
       "prompt": "Помоги спланировать следующий спринт. Сколько SP реально брать, чтобы не переобещать, и какой сделать sprint goal?",
-      "expected_output": "Черновик плана на фактической velocity из закрытых спринтов (или cold-start с пометкой при отсутствии истории), sprint goal в одну фразу, DoD, таблица capacity с P0/P1/P2 и Planned vs Load %, стретч-задачи отдельным слоем, риски.",
-      "files": []
+      "expected_output": "План на фактической velocity из закрытых спринтов (медиана 32 SP), sprint goal в одну фразу, DoD, P0/P1/P2, стретч-слой, риски. Velocity с provenance, не capacity-на-глаз.",
+      "files": [],
+      "assertions": [
+        { "id": "plan_velocity_from_history", "text": "Объём опирается на фактическую velocity из закрытых спринтов (≈32 SP, медиана последних трёх), а не на capacity-на-глаз", "failure_mode": "FM1", "check": "velocity_from_history", "expected_discriminating": true },
+        { "id": "plan_sprint_goal_one_sentence", "text": "Есть sprint goal одной фразой", "failure_mode": "FM2", "check": "sprint_goal_present", "expected_discriminating": false },
+        { "id": "plan_dod_present", "text": "Есть Definition of Done (не просто 'задачи закрыты')", "failure_mode": "FM2", "check": "dod_present", "expected_discriminating": true },
+        { "id": "plan_stretch_layer", "text": "Стретч-задачи выделены отдельным слоем (что резать первым)", "failure_mode": "FM2", "check": "stretch_layer_present", "expected_discriminating": true },
+        { "id": "plan_no_invented_id", "text": "Нет выдуманных id задач/спринтов", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true }
+      ]
     },
     {
       "id": 5,
+      "name": "Connections",
+      "mode": "connections",
+      "fixture": "tracker_active.json",
       "prompt": "Что блокирует релиз платёжного модуля? Покажи всю цепочку зависимостей.",
-      "expected_output": "Граф/цепочки зависимостей к целевым задачам, выделены внешние зависимости. Обход устойчив к циклу блокеров (не зацикливается, цикл показан явно). Каждое ребро с provenance.",
-      "files": []
+      "expected_output": "Цепочки зависимостей к PAY-105, выделена внешняя зависимость PAY-106. Обход устойчив к циклу PAY-107↔PAY-108 (не виснет, цикл показан явно). Каждое ребро с provenance.",
+      "files": [],
+      "assertions": [
+        { "id": "conn_chain_to_release", "text": "Показаны блокеры релиза PAY-105 (PAY-102 и внешний PAY-106)", "failure_mode": "FM1", "check": "blockers_of_release", "expected_discriminating": true },
+        { "id": "conn_external_flagged", "text": "Внешняя зависимость PAY-106 выделена как 'ждём другую команду'", "failure_mode": "FM1", "check": "external_dep_flagged", "expected_discriminating": true },
+        { "id": "conn_cycle_detected", "text": "Цикл PAY-107↔PAY-108 показан явно как проблема (обход не зациклился/не упал)", "failure_mode": "FM6", "check": "cycle_detected", "expected_discriminating": true },
+        { "id": "conn_no_invented_edge", "text": "Все рёбра графа существуют в трекере (нет выдуманных связей)", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true }
+      ]
     },
     {
       "id": 6,
+      "name": "CompositeDailyPlusCreate",
+      "mode": "composite",
+      "fixture": "tracker_active.json",
       "prompt": "Проведи дейли и заодно заведи задачи по всем блокерам, которые там найдёшь.",
-      "expected_output": "Композитный сценарий: роутер разбивает на дейли → извлечение блокеров → создание задач. Дейли сначала, затем черновики задач по блокерам, запись пачкой только после подтверждения.",
-      "files": []
+      "expected_output": "Роутер разбивает на дейли → извлечение блокеров → черновики задач. Дейли сначала, потом черновики (обратимое — можно пачкой), запись только после подтверждения. Ничего не пишется автоматически.",
+      "files": [],
+      "assertions": [
+        { "id": "comp_no_invented_id", "text": "Нет выдуманных id ни в дейли, ни в черновиках", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true },
+        { "id": "comp_stall_business_days", "text": "Stall посчитан в рабочих днях (PAY-102 да, PAY-101 нет)", "failure_mode": "FM3", "check": "stall_business_days", "expected_discriminating": true },
+        { "id": "comp_drafts_need_confirmation", "text": "Задачи по блокерам — черновики в статусе draft (батч допустим), запись ждёт подтверждения", "failure_mode": "FM4", "check": "mutation_is_draft", "expected_discriminating": true },
+        { "id": "comp_no_autowrite", "text": "Ни одна задача не создана автоматически (нет confirmed/executed)", "failure_mode": "FM4", "check": "no_autowrite", "expected_discriminating": true }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "ColdStartPlanning",
+      "mode": "planning",
+      "fixture": "cold_start.json",
+      "prompt": "Команда новая, прошлых спринтов в трекере ещё нет. Прикинь, сколько брать в первый спринт и сформулируй цель.",
+      "expected_output": "Без выдуманной velocity: планирование от заявленной capacity с явной пометкой 'без velocity-основы, риск переобещания'. Sprint goal предложен/запрошен.",
+      "files": [],
+      "assertions": [
+        { "id": "cold_no_invented_velocity", "text": "Не подставлена выдуманная velocity; основа плана помечена как 'без velocity-основы / риск'", "failure_mode": "FM7", "check": "coldstart_no_invented_velocity", "expected_discriminating": true },
+        { "id": "cold_sprint_goal", "text": "Sprint goal предложен или явно запрошен (цель не пропущена)", "failure_mode": "FM2", "check": "sprint_goal_present", "expected_discriminating": false }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "TrackerDownDaily",
+      "mode": "daily",
+      "fixture": "mcp_down.json",
+      "prompt": "Собери дейли по текущему спринту перед стендапом.",
+      "expected_output": "Трекер недоступен → честный отказ с причиной ('трекер недоступен, сводку собрать не могу'), а НЕ полупустая сводка с плейсхолдерами, выглядящая как факт.",
+      "files": [],
+      "assertions": [
+        { "id": "down_explicit_refusal", "text": "Явный отказ с причиной недоступности трекера", "failure_mode": "FM8", "check": "mcp_down_refusal", "expected_discriminating": true },
+        { "id": "down_not_fake_summary", "text": "НЕ собрана сводка-видимость: нет фабрикованных задач/имён/счётчиков", "failure_mode": "FM8", "check": "no_invented_id", "expected_discriminating": true }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "SearchNoMatchHonesty",
+      "mode": "search",
+      "fixture": "tracker_active.json",
+      "prompt": "Что сейчас в работе у Кости?",
+      "expected_output": "Кости нет в команде → честное 'не нашёл', без подстановки ближайшего по имени (напр. не выдавать задачи Игоря/Нины за Костины).",
+      "files": [],
+      "assertions": [
+        { "id": "nomatch_honest", "text": "Ответ 'не нашёл' для несуществующего человека, без подстановки ближайшего", "failure_mode": "FM1", "check": "no_match_honest", "params": { "missing_name": "Кост" }, "expected_discriminating": true },
+        { "id": "nomatch_no_invented_id", "text": "Нет приписанных Косте чужих/выдуманных задач", "failure_mode": "FM1", "check": "no_invented_id", "expected_discriminating": true }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "NearMissShouldNotTrigger",
+      "mode": "trigger_guard",
+      "fixture": "tracker_active.json",
+      "prompt": "Напиши код: реализуй функцию ретрая с экспоненциальной задержкой для платёжного клиента на Python.",
+      "expected_output": "Запрос про написание кода — вне границ скилла (НЕ для написания кода). Скилл не должен активироваться/диспетчеризировать режимы трекера.",
+      "files": [],
+      "assertions": [
+        { "id": "nearmiss_not_triggered", "text": "Скилл teamlead-copilot не активировался на запрос про написание кода", "failure_mode": "FM9", "check": "skill_not_triggered", "expected_discriminating": true }
+      ]
     }
   ]
 }
