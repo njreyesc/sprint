@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<!--
+  Шаблон «живого статуса спринта» для teamlead-copilot.
+  Заполняется агентом из tool results (см. references/status-dashboard.md).
+  Самодостаточный: инлайн-CSS, без внешних запросов, кроме шрифтов — открывается
+  как один файл где угодно. Каждое значение — либо из трекера, либо явный
+  плейсхолдер [нет данных] / [не оценено]; ничего из памяти модели.
+
+  ВАЖНО (egress): этот файл — канал доставки вне banking-периметра. PII/секреты
+  сюда не попадают re-hydrated — см. redaction-rules.md «Второй канал утечки».
+-->
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Статус спринта</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #8a887f;
+      --accent: #d97757;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --amber: #b8860b;
+      --amber-bg: #f7f0dc;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 32px 20px 56px;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    h1, h2, h3, .label, .pill, .metric-num { font-family: 'Poppins', system-ui, sans-serif; }
+
+    /* ---- Header ---- */
+    header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      border-radius: var(--radius);
+      padding: 26px 28px;
+      margin-bottom: 22px;
+    }
+    .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #b0aea5; font-family: 'Poppins', sans-serif; font-weight: 600; }
+    header h1 { font-size: 26px; font-weight: 600; margin: 6px 0 14px; }
+    .header-meta { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+    .day-of { font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 14px; }
+
+    /* ---- Freshness badge ---- */
+    .freshness {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: 'Poppins', sans-serif; font-size: 12.5px; font-weight: 600;
+      padding: 5px 11px; border-radius: 999px;
+    }
+    .freshness.ok    { background: var(--green-bg); color: var(--green); }
+    .freshness.warn  { background: var(--amber-bg); color: var(--amber); }
+    .freshness.stale { background: var(--red-bg);   color: var(--red); }
+    .freshness .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    /* ---- Tempo ---- */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 18px;
+    }
+    .card > h2 {
+      font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-muted); font-weight: 600; margin-bottom: 16px;
+    }
+    .tempo-row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-end; margin-bottom: 14px; }
+    .metric { display: flex; flex-direction: column; }
+    .metric-num { font-size: 30px; font-weight: 700; line-height: 1; }
+    .metric .label { font-size: 12px; color: var(--text-muted); margin-top: 6px; font-weight: 500; }
+    .bar { height: 12px; border-radius: 999px; background: var(--border); overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: var(--green); border-radius: 999px; }
+    .tempo-verdict {
+      margin-top: 14px; font-family: 'Poppins', sans-serif; font-size: 14px; font-weight: 600;
+    }
+    .tempo-caveat { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ---- People ---- */
+    .people { list-style: none; display: grid; gap: 12px; }
+    .person { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .person:last-child { border-bottom: none; padding-bottom: 0; }
+    .who { font-family: 'Poppins', sans-serif; font-weight: 600; min-width: 130px; }
+    .what { flex: 1; }
+    .what .task { font-size: 15px; }
+    .what .done { font-size: 13px; color: var(--green); margin-top: 2px; }
+    .flag { display: inline-flex; align-items: center; gap: 6px; font-family: 'Poppins', sans-serif; font-size: 12.5px; font-weight: 600; margin-top: 6px; }
+    .flag.busfactor { color: var(--amber); }
+    .flag.idle { color: var(--text-muted); }
+
+    /* ---- Blockers ---- */
+    .blocker { display: flex; gap: 12px; align-items: baseline; padding: 9px 0; border-bottom: 1px dashed var(--border); }
+    .blocker:last-child { border-bottom: none; }
+    .blocker .pill { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+    .pill.explicit { background: var(--red-bg); color: var(--red); }
+    .pill.stall    { background: var(--amber-bg); color: var(--amber); }
+    .blocker .txt { font-size: 14.5px; }
+    .blocker .note { font-size: 12.5px; color: var(--text-muted); }
+    .empty-note { font-size: 13px; color: var(--text-muted); font-style: italic; }
+
+    /* ---- Coverage boundary footer ---- */
+    .boundary {
+      margin-top: 8px; padding: 14px 18px; border-radius: var(--radius);
+      background: #f3f1ea; border: 1px solid var(--border);
+      font-size: 12.5px; color: var(--text-muted);
+    }
+    .boundary strong { color: var(--text); font-family: 'Poppins', sans-serif; font-weight: 600; }
+    .ts { font-size: 12px; color: var(--text-muted); margin-top: 18px; text-align: right; font-family: 'Poppins', sans-serif; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ▸ Заголовок: цель + день N из M + бейдж свежести данных -->
+  <header>
+    <div class="eyebrow">Живой статус спринта</div>
+    <h1>{{SPRINT_GOAL | [нет данных]}}</h1>
+    <div class="header-meta">
+      <span class="day-of">День {{DAY_N}} из {{DAY_M}}</span>
+      <!-- класс: ok | warn | stale — по доле протухших задач (см. status-dashboard.md) -->
+      <span class="freshness warn"><span class="dot"></span>{{FRESHNESS_LABEL}}</span>
+    </div>
+  </header>
+
+  <!-- ▸ Темп: закрыто/осталось SP + вердикт С ПОПРАВКОЙ на свежесть -->
+  <section class="card">
+    <h2>Темп</h2>
+    <div class="tempo-row">
+      <div class="metric"><span class="metric-num">{{SP_DONE}}</span><span class="label">SP закрыто</span></div>
+      <div class="metric"><span class="metric-num">{{SP_LEFT}}</span><span class="label">SP осталось</span></div>
+      <div class="metric"><span class="metric-num">{{SP_TOTAL}}</span><span class="label">SP в плане</span></div>
+    </div>
+    <div class="bar"><span style="width: {{DONE_PCT}}%"></span></div>
+    <!-- вердикт: «успеваем» / «риск» — НИКОГДА без оговорки про свежесть -->
+    <p class="tempo-verdict">{{TEMPO_VERDICT}}</p>
+    <p class="tempo-caveat">{{TEMPO_CAVEAT}}</p>
+  </section>
+
+  <!-- ▸ По людям: что в работе / закрыто; bus-factor и простой — явными флагами -->
+  <section class="card">
+    <h2>По людям</h2>
+    <ul class="people">
+      <!-- повтор на каждого участника -->
+      <li class="person">
+        <div class="who">{{PERSON_NAME}}</div>
+        <div class="what">
+          <div class="task">{{TASK}} — {{STATUS}}</div>
+          <div class="done">✓ закрыто вчера: {{CLOSED_YESTERDAY}}</div>
+          <!-- показать только при срабатывании; убрать строку, если флага нет -->
+          <span class="flag busfactor">⚠ bus-factor: {{BUSFACTOR_NOTE}}</span>
+          <span class="flag idle">○ без задач в спринте</span>
+        </div>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ▸ Блокеры и застой: два класса из ADR-003 -->
+  <section class="card">
+    <h2>Блокеры и застой</h2>
+    <div class="blocker">
+      <span class="pill explicit">явный</span>
+      <span><span class="txt">{{TASK}}</span> <span class="note">— blocked by {{BLOCKED_BY}}</span></span>
+    </div>
+    <div class="blocker">
+      <span class="pill stall">застой</span>
+      <span><span class="txt">{{TASK}}</span> <span class="note">— {{STALL_DAYS}} дней без активности · свежесть под вопросом</span></span>
+    </div>
+    <!-- если блокеров нет, НЕ оставлять блок пустым «как будто их нет» -->
+    <p class="empty-note">Явных блокеров и застоя не найдено в трекере.</p>
+  </section>
+
+  <!-- ▸ Граница покрытия: чего дашборд НЕ знает (не давать достроить самому) -->
+  <div class="boundary">
+    <strong>Что покрыто:</strong> явные блокеры (связь blocked by / статус Blocked)
+    и застой (нет активности N дней). <strong>Вне контура:</strong> немые блокеры
+    без следа в трекере. Данные на {{FRESHNESS_DETAIL}} — позиции с пометкой
+    «свежесть под вопросом» могли измениться вне трекера.
+  </div>
+
+  <p class="ts">Собрано из трекера · {{GENERATED_AT}}</p>
+
+</div>
+</body>
+</html>
